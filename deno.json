@@ -1,0 +1,33 @@
+{
+  "name": "@transitionsag/deno-workspace-vite-plugin",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Vite plugin that resolves local workspace relative paths from deno.json import maps",
+  "exports": {
+    ".": "./src/mod.ts"
+  },
+  "imports": {
+    "vite": "npm:vite@^8",
+    "@std/assert": "jsr:@std/assert@^1.0",
+    "@std/jsonc": "jsr:@std/jsonc@^1.0.2",
+    "@std/path": "jsr:@std/path@^1.1.4",
+    "@std/fs": "jsr:@std/fs@^1.0.19",
+    "tinyglobby": "npm:tinyglobby@^0.2.0"
+  },
+  "tasks": {
+    "test": "deno test --allow-read --allow-write --allow-env src/",
+    "test:watch": "deno test --watch --allow-read --allow-write --allow-env src/"
+  },
+  "compilerOptions": {
+    "lib": [
+      "ESNext",
+      "DOM",
+      "Deno.ns"
+    ]
+  },
+  "publish": {
+    "exclude": [
+      "**/*.test.ts"
+    ]
+  }
+}
