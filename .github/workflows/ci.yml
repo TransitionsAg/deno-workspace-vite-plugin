@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: nix-community/cache-nix-action@v5
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 1073741824
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+
+      - name: Check formatting
+        run: nix develop --command deno fmt --check
+
+      - name: Lint
+        run: nix develop --command deno lint
+
+      - name: Type check
+        run: nix develop --command deno check src/mod.ts
+
+      - name: Run tests
+        run: nix develop --command deno task test
+
+  publish:
+    needs: lint
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: cachix/install-nix-action@v30
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: nix-community/cache-nix-action@v5
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 1073741824
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+
+      - name: Version bump
+        id: version
+        run: |
+          CURRENT_VERSION=$(nix develop --command deno eval "console.log(JSON.parse(Deno.readTextFileSync('deno.json')).version)")
+
+          if ! git log --format=%B -n 1 HEAD | grep -qP '^release:\s*'; then
+            echo "No release commit detected"
+            exit 0
+          fi
+
+          NEW_VERSION=$(git log --format=%B -n 1 HEAD | grep -oP 'release:\s*\K[\d]+\.[\d]+\.[\d]+(-[\w.]+)?')
+          if [ -z "$NEW_VERSION" ]; then
+            echo "No version specified after 'release:' in commit message"
+            exit 1
+          fi
+
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $CURRENT_VERSION -> $NEW_VERSION"
+
+          nix develop --command deno eval "
+            const json = JSON.parse(Deno.readTextFileSync('deno.json'));
+            json.version = '$NEW_VERSION';
+            Deno.writeTextFileSync('deno.json', JSON.stringify(json, null, 2) + '\n');
+          "
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add deno.json
+
+          if git diff --cached --quiet; then
+            echo "Version already at $NEW_VERSION, skipping"
+          else
+            git commit --amend --no-edit
+            git push --force-with-lease
+          fi
+
+          if git tag "v$NEW_VERSION" 2>/dev/null; then
+            git push origin "v$NEW_VERSION"
+          else
+            echo "Tag v$NEW_VERSION already exists"
+          fi
+
+          echo "done=true" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to JSR
+        if: steps.version.outputs.done == 'true'
+        run: nix develop --command deno publish
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.done == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.new_version }}
+          name: v${{ steps.version.outputs.new_version }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

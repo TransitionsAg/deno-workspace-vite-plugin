@@ -1,0 +1,26 @@
+# Dependencies
+deno.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+*.js
+*.js.map
+*.d.ts
+
+# Environment
+.env
+.env.local
+
+# precommit
+.pre-commit-config.yaml
+
