@@ -1,4 +1,9 @@
-import { assertEquals, assertNotEquals, assertStrictEquals } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertNotEquals,
+  assertStrictEquals,
+} from "@std/assert";
 import { join } from "@std/path";
 import { collectImportMap } from "./import-map.ts";
 
@@ -447,6 +452,81 @@ Deno.test("workspace:* resolves CSS export for Tailwind/Vite integration", async
       transformed!.code,
       `@import "${join(uiDir, "src", "styles.css")}";\nbody { margin: 0; }`,
     );
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("config hook sorts aliases longest-first to prevent prefix clobbering", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "alias-order-test-" });
+  try {
+    const { denoWorkspaceVitePlugin } = await import("./plugin.ts");
+
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({
+        workspace: ["./packages/*"],
+      }),
+    );
+
+    // Package with both a root export and a CSS subpath export
+    const bloomDir = join(tmp, "packages", "bloom");
+    await Deno.mkdir(join(bloomDir, "src"), { recursive: true });
+    await Deno.writeTextFile(
+      join(bloomDir, "deno.json"),
+      JSON.stringify({
+        name: "@myapp/bloom",
+        exports: {
+          ".": "./src/mod.ts",
+          "./styles.css": "./src/styles.css",
+        },
+      }),
+    );
+    await Deno.writeTextFile(join(bloomDir, "src", "mod.ts"), "export {};");
+    await Deno.writeTextFile(
+      join(bloomDir, "src", "styles.css"),
+      ".bloom { color: red; }",
+    );
+
+    const plugin = denoWorkspaceVitePlugin({ root: tmp });
+
+    // Call config hook to get the alias configuration
+    const configFn = plugin.config as (
+      config: { root: string },
+    ) => Promise<
+      | { resolve: { alias: Array<{ find: string; replacement: string }> } }
+      | undefined
+    >;
+
+    const result = await configFn({ root: tmp });
+    assert(result, "config hook should return alias config");
+
+    const aliases = result.resolve.alias;
+    assert(
+      Array.isArray(aliases),
+      "aliases should be an array (not an object)",
+    );
+
+    // Find the two bloom entries
+    const bloomRoot = aliases.find((a) => a.find === "@myapp/bloom");
+    const bloomCss = aliases.find((a) => a.find === "@myapp/bloom/styles.css");
+
+    assert(bloomRoot, "@myapp/bloom alias should exist");
+    assert(bloomCss, "@myapp/bloom/styles.css alias should exist");
+
+    // The CSS subpath alias MUST come before the root alias
+    // Otherwise Vite's prefix matching resolves @myapp/bloom/styles.css
+    // as mod.ts/styles.css (ENOTDIR)
+    const rootIdx = aliases.indexOf(bloomRoot!);
+    const cssIdx = aliases.indexOf(bloomCss!);
+    assert(
+      cssIdx < rootIdx,
+      `Subpath alias (idx=${cssIdx}) must precede root alias (idx=${rootIdx}) to prevent prefix clobbering`,
+    );
+
+    // Verify the replacements point to the right files
+    assertEquals(bloomRoot!.replacement, join(bloomDir, "src", "mod.ts"));
+    assertEquals(bloomCss!.replacement, join(bloomDir, "src", "styles.css"));
   } finally {
     await Deno.remove(tmp, { recursive: true });
   }

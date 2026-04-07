@@ -29,16 +29,23 @@ export function denoWorkspaceVitePlugin(
       importMap = await collectImportMap(memberDirs, workspace.rootDir);
       if (!importMap) return;
 
-      const alias: Record<string, string> = {};
+      const aliasMap: Record<string, string> = {};
       for (const entry of importMap.entries.values()) {
         if (!entry.absolutePath) continue;
         const resolved = resolveEntry(entry, entry.key);
         if (resolved) {
-          alias[entry.key] = resolved;
+          aliasMap[entry.key] = resolved;
         }
       }
 
-      if (Object.keys(alias).length > 0) {
+      const aliasEntries = Object.entries(aliasMap);
+      if (aliasEntries.length > 0) {
+        // Sort longest-first so subpath exports (e.g. @pkg/styles.css)
+        // match before the bare package name (e.g. @pkg) in Vite's
+        // prefix-based alias resolution.
+        const alias = aliasEntries
+          .sort((a, b) => b[0].length - a[0].length)
+          .map(([find, replacement]) => ({ find, replacement }));
         return {
           resolve: { alias },
         };
