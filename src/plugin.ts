@@ -96,5 +96,32 @@ export function denoWorkspaceVitePlugin(
       }
       return null;
     },
+
+    transform(code, id) {
+      if (!importMap) return null;
+      if (!id.endsWith(".css")) return null;
+
+      let transformed = false;
+      let result = code;
+
+      for (const entry of importMap.entries.values()) {
+        if (!entry.absolutePath) continue;
+        const resolved = resolveEntry(entry, entry.key);
+        if (!resolved) continue;
+
+        const importPattern = new RegExp(
+          `@import\\s+["']${
+            entry.key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+          }["']`,
+          "g",
+        );
+        if (importPattern.test(result)) {
+          result = result.replace(importPattern, `@import "${resolved}"`);
+          transformed = true;
+        }
+      }
+
+      return transformed ? { code: result, map: null } : null;
+    },
   };
 }
