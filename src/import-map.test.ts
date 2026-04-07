@@ -605,3 +605,207 @@ Deno.test("resolveEntry resolves CSS from package.json imports (vinxi/solid-star
     await Deno.remove(tmp, { recursive: true });
   }
 });
+
+Deno.test("collectImportMap auto-discovers workspace package exports", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "importmap-test-" });
+  try {
+    const pkgDir = join(tmp, "packages", "bloom");
+    await Deno.mkdir(join(pkgDir, "src"), { recursive: true });
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({
+        workspace: ["./packages/*"],
+      }),
+    );
+    await Deno.writeTextFile(
+      join(pkgDir, "deno.json"),
+      JSON.stringify({
+        name: "@transitionsag/seeds-bloom",
+        exports: {
+          ".": "./src/mod.ts",
+          "./styles.css": "./src/styles.css",
+        },
+      }),
+    );
+    await Deno.writeTextFile(
+      join(pkgDir, "src", "mod.ts"),
+      "export const bloom = {};",
+    );
+    await Deno.writeTextFile(
+      join(pkgDir, "src", "styles.css"),
+      ".bloom { color: green; }",
+    );
+
+    const importMap = await collectImportMap([], tmp);
+
+    const mainEntry = importMap.entries.get("@transitionsag/seeds-bloom");
+    assertNotEquals(mainEntry, undefined);
+    assertEquals(mainEntry!.absolutePath, join(pkgDir, "src", "mod.ts"));
+
+    const cssEntry = importMap.entries.get(
+      "@transitionsag/seeds-bloom/styles.css",
+    );
+    assertNotEquals(cssEntry, undefined);
+    assertEquals(cssEntry!.absolutePath, join(pkgDir, "src", "styles.css"));
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("collectImportMap workspace exports with string export target", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "importmap-test-" });
+  try {
+    const pkgDir = join(tmp, "packages", "form");
+    await Deno.mkdir(join(pkgDir, "src"), { recursive: true });
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({
+        workspace: ["./packages/*"],
+      }),
+    );
+    await Deno.writeTextFile(
+      join(pkgDir, "deno.json"),
+      JSON.stringify({
+        name: "@transitionsag/seeds-form",
+        exports: "./src/mod.ts",
+      }),
+    );
+    await Deno.writeTextFile(
+      join(pkgDir, "src", "mod.ts"),
+      "export const form = {};",
+    );
+
+    const importMap = await collectImportMap([], tmp);
+
+    const entry = importMap.entries.get("@transitionsag/seeds-form");
+    assertNotEquals(entry, undefined);
+    assertEquals(entry!.absolutePath, join(pkgDir, "src", "mod.ts"));
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("collectImportMap merges workspace exports with member imports", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "importmap-test-" });
+  try {
+    const bloomDir = join(tmp, "packages", "bloom");
+    const formDir = join(tmp, "packages", "form");
+    await Deno.mkdir(join(bloomDir, "src"), { recursive: true });
+    await Deno.mkdir(join(formDir, "src"), { recursive: true });
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({
+        workspace: ["./packages/*"],
+      }),
+    );
+    await Deno.writeTextFile(
+      join(bloomDir, "deno.json"),
+      JSON.stringify({
+        name: "@transitionsag/seeds-bloom",
+        exports: {
+          ".": "./src/mod.ts",
+          "./styles.css": "./src/styles.css",
+        },
+      }),
+    );
+    await Deno.writeTextFile(
+      join(bloomDir, "src", "mod.ts"),
+      "export const bloom = {};",
+    );
+    await Deno.writeTextFile(
+      join(bloomDir, "src", "styles.css"),
+      ".bloom { color: green; }",
+    );
+    await Deno.writeTextFile(
+      join(formDir, "deno.json"),
+      JSON.stringify({
+        name: "@transitionsag/seeds-form",
+        imports: {
+          "@transitionsag/seeds-form": "./src/mod.ts",
+          "@transitionsag/seeds-form/resolver/zod": "./src/resolver/zod.ts",
+        },
+      }),
+    );
+    await Deno.writeTextFile(
+      join(formDir, "src", "mod.ts"),
+      "export const form = {};",
+    );
+    await Deno.mkdir(join(formDir, "src", "resolver"), { recursive: true });
+    await Deno.writeTextFile(
+      join(formDir, "src", "resolver", "zod.ts"),
+      "export const zodResolver = {};",
+    );
+
+    const importMap = await collectImportMap([], tmp);
+
+    assertEquals(importMap.entries.size, 4);
+
+    const bloomMain = importMap.entries.get("@transitionsag/seeds-bloom");
+    assertEquals(bloomMain!.absolutePath, join(bloomDir, "src", "mod.ts"));
+
+    const bloomCss = importMap.entries.get(
+      "@transitionsag/seeds-bloom/styles.css",
+    );
+    assertEquals(bloomCss!.absolutePath, join(bloomDir, "src", "styles.css"));
+
+    const formMain = importMap.entries.get("@transitionsag/seeds-form");
+    assertEquals(formMain!.absolutePath, join(formDir, "src", "mod.ts"));
+
+    const formZod = importMap.entries.get(
+      "@transitionsag/seeds-form/resolver/zod",
+    );
+    assertEquals(
+      formZod!.absolutePath,
+      join(formDir, "src", "resolver", "zod.ts"),
+    );
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("resolveEntry skips workspace: targets", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "importmap-test-" });
+  try {
+    const pkgDir = join(tmp, "packages", "bloom");
+    await Deno.mkdir(join(pkgDir, "src"), { recursive: true });
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({
+        workspace: ["./packages/*"],
+      }),
+    );
+    await Deno.writeTextFile(
+      join(pkgDir, "deno.json"),
+      JSON.stringify({
+        name: "@transitionsag/seeds-bloom",
+        exports: {
+          ".": "./src/mod.ts",
+          "./styles.css": "./src/styles.css",
+        },
+        imports: {
+          "@transitionsag/seeds-form": "workspace:*",
+        },
+      }),
+    );
+    await Deno.writeTextFile(
+      join(pkgDir, "src", "mod.ts"),
+      "export const bloom = {};",
+    );
+    await Deno.writeTextFile(
+      join(pkgDir, "src", "styles.css"),
+      ".bloom { color: green; }",
+    );
+
+    const importMap = await collectImportMap([], tmp);
+
+    const formEntry = importMap.entries.get("@transitionsag/seeds-form");
+    assertStrictEquals(formEntry, undefined);
+
+    const cssEntry = importMap.entries.get(
+      "@transitionsag/seeds-bloom/styles.css",
+    );
+    assertNotEquals(cssEntry, undefined);
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});

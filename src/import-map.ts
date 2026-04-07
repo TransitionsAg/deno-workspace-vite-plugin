@@ -13,10 +13,15 @@ export type ImportMap = {
   entries: Map<string, ImportMapEntry>;
 };
 
-function readImportsFromConfig(configPath: string): Record<string, string> {
-  if (!existsSync(configPath)) return {};
+function readConfig(configPath: string): Record<string, unknown> | null {
+  if (!existsSync(configPath)) return null;
   const content = Deno.readTextFileSync(configPath);
-  const json = parseJsonc(content) as Record<string, unknown>;
+  return parseJsonc(content) as Record<string, unknown>;
+}
+
+function readImportsFromConfig(configPath: string): Record<string, string> {
+  const json = readConfig(configPath);
+  if (!json) return {};
   const imports = json.imports;
   if (!imports || typeof imports !== "object") return {};
   const result: Record<string, string> = {};
@@ -31,7 +36,8 @@ function readImportsFromConfig(configPath: string): Record<string, string> {
 function resolveTarget(target: string, configDir: string): string | null {
   if (
     target.startsWith("jsr:") || target.startsWith("npm:") ||
-    target.startsWith("http:") || target.startsWith("https:")
+    target.startsWith("http:") || target.startsWith("https:") ||
+    target.startsWith("workspace:")
   ) {
     return null;
   }
@@ -39,10 +45,113 @@ function resolveTarget(target: string, configDir: string): string | null {
   return normalize(join(configDir, target));
 }
 
+type WorkspaceMember = {
+  dir: string;
+  name: string | null;
+  exports: Record<string, string> | null;
+};
+
+function readWorkspaceMembers(workspaceRoot: string): WorkspaceMember[] {
+  const rootConfig = readConfig(join(workspaceRoot, "deno.json"));
+  if (!rootConfig) return [];
+
+  const workspaces = rootConfig.workspace;
+  if (!Array.isArray(workspaces)) return [];
+
+  const members: WorkspaceMember[] = [];
+
+  for (const pattern of workspaces) {
+    const dir = join(workspaceRoot, pattern.replace(/\/\*$/, ""));
+    if (!existsSync(dir)) continue;
+
+    for (const entry of Deno.readDirSync(dir)) {
+      if (!entry.isDirectory) continue;
+      const memberDir = join(dir, entry.name);
+      for (const configFile of ["deno.json", "deno.jsonc", "package.json"]) {
+        const configPath = join(memberDir, configFile);
+        const json = readConfig(configPath);
+        if (!json) continue;
+
+        const name = typeof json.name === "string" ? json.name : null;
+        const exports = json.exports;
+        const exportsMap: Record<string, string> | null =
+          exports && typeof exports === "object" && !Array.isArray(exports)
+            ? exports as Record<string, string>
+            : typeof exports === "string"
+            ? { ".": exports }
+            : null;
+
+        members.push({
+          dir: memberDir,
+          name,
+          exports: exportsMap,
+        });
+        break;
+      }
+    }
+  }
+
+  return members;
+}
+
+function resolveExportTarget(
+  target: string,
+  configDir: string,
+): string | null {
+  if (
+    target.startsWith("jsr:") || target.startsWith("npm:") ||
+    target.startsWith("http:") || target.startsWith("https:") ||
+    target.startsWith("workspace:")
+  ) {
+    return null;
+  }
+  if (isAbsolute(target)) return normalize(target);
+  return normalize(join(configDir, target));
+}
+
+function collectExportsFromMembers(
+  members: WorkspaceMember[],
+): Map<string, ImportMapEntry> {
+  const entries = new Map<string, ImportMapEntry>();
+
+  for (const member of members) {
+    if (!member.name || !member.exports) continue;
+
+    for (const [exportKey, exportTarget] of Object.entries(member.exports)) {
+      const importKey = exportKey === "."
+        ? member.name
+        : `${member.name}${exportKey.slice(1)}`;
+
+      const absolutePath = resolveExportTarget(exportTarget, member.dir);
+      if (!entries.has(importKey)) {
+        entries.set(importKey, {
+          key: importKey,
+          target: exportTarget,
+          absolutePath,
+          sourceConfig: join(member.dir, "deno.json"),
+        });
+      }
+    }
+  }
+
+  return entries;
+}
+
 export function collectImportMap(
   memberDirs: string[],
+  workspaceRoot?: string,
 ): ImportMap {
   const entries = new Map<string, ImportMapEntry>();
+
+  if (workspaceRoot) {
+    const members = readWorkspaceMembers(workspaceRoot);
+    const exportEntries = collectExportsFromMembers(members);
+    for (const [key, entry] of exportEntries) {
+      if (!entries.has(key)) {
+        entries.set(key, entry);
+      }
+    }
+  }
 
   for (const dir of memberDirs) {
     const configDir = normalize(dir);
@@ -108,7 +217,7 @@ export function resolveEntry(entry: ImportMapEntry, id: string): string | null {
     return candidate;
   }
 
-  for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]) {
+  for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css"]) {
     const withExt = candidate + ext;
     if (existsSync(withExt)) return withExt;
   }

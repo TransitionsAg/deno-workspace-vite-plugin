@@ -20,17 +20,44 @@ export function denoWorkspaceVitePlugin(
     name: "deno-workspace-resolver",
     enforce: "pre",
 
-    async configResolved(config) {
-      if (initialized) return;
-      const root = options.root ?? config.root;
+    async config(config) {
+      const root = options.root ?? config.root ?? Deno.cwd();
       const workspace = findWorkspaceRoot(root);
-      if (!workspace) {
-        initialized = true;
-        return;
-      }
+      if (!workspace) return;
 
       const memberDirs = await expandMembers(workspace);
-      importMap = await collectImportMap(memberDirs);
+      importMap = await collectImportMap(memberDirs, workspace.rootDir);
+      if (!importMap) return;
+
+      const alias: Record<string, string> = {};
+      for (const entry of importMap.entries.values()) {
+        if (!entry.absolutePath) continue;
+        const resolved = resolveEntry(entry, entry.key);
+        if (resolved) {
+          alias[entry.key] = resolved;
+        }
+      }
+
+      if (Object.keys(alias).length > 0) {
+        return {
+          resolve: { alias },
+        };
+      }
+    },
+
+    async configResolved(config) {
+      if (initialized) return;
+      if (!importMap) {
+        const root = options.root ?? config.root;
+        const workspace = findWorkspaceRoot(root);
+        if (!workspace) {
+          initialized = true;
+          return;
+        }
+
+        const memberDirs = await expandMembers(workspace);
+        importMap = await collectImportMap(memberDirs, workspace.rootDir);
+      }
       initialized = true;
     },
 
