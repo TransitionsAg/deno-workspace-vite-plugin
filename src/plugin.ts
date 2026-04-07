@@ -58,5 +58,16 @@ export function denoWorkspaceVitePlugin(
       const resolved = resolveEntry(entry, id);
       return resolved;
     },
+
+    load(id) {
+      const [path, query] = id.split("?");
+      if (path.startsWith("/@manifest") && path.endsWith("assets")) {
+        const params = new URLSearchParams(query ?? "");
+        if (!params.get("id")) {
+          return { code: "export default []", moduleType: "js" };
+        }
+      }
+      return null;
+    },
   };
 }

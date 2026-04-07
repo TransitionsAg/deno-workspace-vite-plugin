@@ -401,3 +401,39 @@ Deno.test("plugin resolveId skips vinxi virtual modules", () => {
   assertStrictEquals(resolveId("vinxi:manifest"), null);
   assertStrictEquals(resolveId("\0vite:css"), null);
 });
+
+Deno.test("plugin load intercepts malformed /@manifest/assets without id", async () => {
+  const plugin = denoWorkspaceVitePlugin();
+  const load = plugin.load as (
+    id: string,
+  ) => Promise<{ code: string; moduleType: string } | null>;
+
+  const malformedNoQuery = await load("/@manifest/assets");
+  assertEquals(malformedNoQuery, {
+    code: "export default []",
+    moduleType: "js",
+  });
+
+  const malformedEmptyQuery = await load("/@manifest/assets?");
+  assertEquals(malformedEmptyQuery, {
+    code: "export default []",
+    moduleType: "js",
+  });
+
+  const malformedOtherQuery = await load("/@manifest/assets?foo=bar");
+  assertEquals(malformedOtherQuery, {
+    code: "export default []",
+    moduleType: "js",
+  });
+
+  const validRequest = await load(
+    "/@manifest/docs/123456/assets?id=/src/client.tsx",
+  );
+  assertStrictEquals(validRequest, null);
+
+  const nonManifestRequest = await load("/src/client.tsx");
+  assertStrictEquals(nonManifestRequest, null);
+
+  const nonAssetsManifest = await load("/@manifest/docs/123456/chunks");
+  assertStrictEquals(nonAssetsManifest, null);
+});
