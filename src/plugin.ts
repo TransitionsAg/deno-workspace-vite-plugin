@@ -1,152 +1,105 @@
 import type { Plugin } from "vite";
-import { expandMembers, findWorkspaceRoot } from "./workspace.ts";
-import {
-  collectImportMap,
-  type JsrResolutionOptions,
-  matchImportMap,
-  resolveEntry,
-} from "./import-map.ts";
+import { join } from "@std/path";
+import { parse as parseJsonc } from "@std/jsonc";
+
+function jsrSpecifierToNpmPath(specifier: string): string {
+  const rest = specifier.slice(4).replace(/@[\^~].*$/, "");
+  if (rest.startsWith("@")) {
+    return rest.slice(1).replace("/", "__");
+  }
+  return rest.replace("/", "__");
+}
+
+function readConfig(path: string): Record<string, unknown> | null {
+  try {
+    const content = Deno.readTextFileSync(path);
+    return parseJsonc(content) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function collectJsrAliases(root: string): Record<string, string> {
+  let denoJson = readConfig(join(root, "deno.json"));
+  if (!denoJson) {
+    denoJson = readConfig(join(root, "deno.jsonc"));
+  }
+  if (!denoJson) return {};
+
+  const aliases: Record<string, string> = {};
+
+  const processImports = (imports: Record<string, string>) => {
+    for (const [alias, specifier] of Object.entries(imports)) {
+      if (specifier.startsWith("jsr:")) {
+        const npmName = jsrSpecifierToNpmPath(specifier);
+        const npmPath = join(root, "node_modules", "@jsr", npmName);
+        try {
+          Deno.statSync(npmPath);
+          aliases[alias] = npmPath;
+        } catch {
+          // Package not installed, skip
+        }
+      }
+    }
+  };
+
+  if (denoJson.imports && typeof denoJson.imports === "object") {
+    processImports(denoJson.imports as Record<string, string>);
+  }
+
+  const workspace = denoJson.workspace;
+  if (Array.isArray(workspace)) {
+    for (const pattern of workspace) {
+      if (typeof pattern !== "string") continue;
+      const baseDir = join(root, pattern.replace(/\/\*$/, ""));
+      try {
+        for (const entry of Deno.readDirSync(baseDir)) {
+          if (entry.isDirectory) {
+            const pkgPath = join(baseDir, entry.name);
+            let pkgConfig = readConfig(join(pkgPath, "deno.json"));
+            if (!pkgConfig) {
+              pkgConfig = readConfig(join(pkgPath, "deno.jsonc"));
+            }
+            if (pkgConfig?.imports && typeof pkgConfig.imports === "object") {
+              processImports(pkgConfig.imports as Record<string, string>);
+            }
+          }
+        }
+      } catch {
+        // Directory doesn't exist, skip
+      }
+    }
+  }
+
+  return aliases;
+}
 
 export type DenoWorkspaceVitePluginOptions = {
   root?: string;
-  resolveJsrDependencies?: boolean;
 };
 
 export function denoWorkspaceVitePlugin(
   options: DenoWorkspaceVitePluginOptions = {},
 ): Plugin {
-  let importMap: Awaited<ReturnType<typeof collectImportMap>> | null = null;
-  let initialized = false;
-
   return {
     name: "deno-workspace-resolver",
     enforce: "pre",
 
-    async config(config) {
+    config(config) {
       const root = options.root ?? config.root ?? Deno.cwd();
-      const workspace = findWorkspaceRoot(root);
-      if (!workspace) return;
+      const aliases = collectJsrAliases(root);
+      const aliasEntries = Object.entries(aliases);
 
-      const memberDirs = await expandMembers(workspace);
-      const jsrOptions: JsrResolutionOptions | undefined =
-        options.resolveJsrDependencies
-          ? { resolveJsrDependencies: true, workspaceRoot: workspace.rootDir }
-          : undefined;
-      importMap = await collectImportMap(
-        memberDirs,
-        workspace.rootDir,
-        jsrOptions,
-      );
-      if (!importMap) return;
+      if (aliasEntries.length === 0) return;
 
-      const aliasMap: Record<string, string> = {};
-      for (const entry of importMap.entries.values()) {
-        if (!entry.absolutePath) continue;
-        const resolved = resolveEntry(entry, entry.key);
-        if (resolved) {
-          aliasMap[entry.key] = resolved;
-        }
-      }
-
-      const aliasEntries = Object.entries(aliasMap);
-      if (aliasEntries.length > 0) {
-        // Sort longest-first so subpath exports (e.g. @pkg/styles.css)
-        // match before the bare package name (e.g. @pkg) in Vite's
-        // prefix-based alias resolution.
-        const alias = aliasEntries
-          .sort((a, b) => b[0].length - a[0].length)
-          .map(([find, replacement]) => ({ find, replacement }));
-        return {
-          resolve: { alias },
-        };
-      }
-    },
-
-    async configResolved(config) {
-      if (initialized) return;
-      if (!importMap) {
-        const root = options.root ?? config.root;
-        const workspace = findWorkspaceRoot(root);
-        if (!workspace) {
-          initialized = true;
-          return;
-        }
-
-        const memberDirs = await expandMembers(workspace);
-        const jsrOptions: JsrResolutionOptions | undefined =
-          options.resolveJsrDependencies
-            ? { resolveJsrDependencies: true, workspaceRoot: workspace.rootDir }
-            : undefined;
-        importMap = await collectImportMap(
-          memberDirs,
-          workspace.rootDir,
-          jsrOptions,
-        );
-      }
-      initialized = true;
-    },
-
-    resolveId(id) {
-      if (!importMap) return null;
-      if (id.startsWith(".") || id.startsWith("/")) return null;
-      if (
-        id.startsWith("npm:") || id.startsWith("jsr:") ||
-        id.startsWith("http:") || id.startsWith("https:") ||
-        id.startsWith("\0")
-      ) return null;
-      if (
-        id.startsWith("@manifest/") ||
-        id.startsWith("/@manifest") ||
-        id.startsWith("virtual:") ||
-        id.startsWith("$vinxi/") ||
-        id.startsWith("vinxi:") ||
-        id.startsWith("\0vite:")
-      ) return null;
-
-      const entry = matchImportMap(id, importMap);
-      if (!entry) return null;
-      if (!entry.absolutePath) return null;
-
-      const resolved = resolveEntry(entry, id);
-      return resolved;
-    },
-
-    load(id) {
-      const [path, query] = id.split("?");
-      if (path.startsWith("/@manifest") && path.endsWith("assets")) {
-        const params = new URLSearchParams(query ?? "");
-        if (!params.get("id")) {
-          return { code: "export default []", moduleType: "js" };
-        }
-      }
-      return null;
-    },
-
-    transform(code, id) {
-      if (!importMap) return null;
-      if (!id.endsWith(".css")) return null;
-
-      let transformed = false;
-      let result = code;
-
-      for (const entry of importMap.entries.values()) {
-        if (!entry.absolutePath) continue;
-        const resolved = resolveEntry(entry, entry.key);
-        if (!resolved) continue;
-
-        const importPattern = new RegExp(
-          `@import\\s+["']${
-            entry.key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-          }["']`,
-          "g",
-        );
-        if (importPattern.test(result)) {
-          result = result.replace(importPattern, `@import "${resolved}"`);
-          transformed = true;
-        }
-      }
-
-      return transformed ? { code: result, map: null } : null;
+      return {
+        resolve: {
+          alias: aliasEntries.map(([find, replacement]) => ({
+            find,
+            replacement,
+          })),
+        },
+      };
     },
   };
 }

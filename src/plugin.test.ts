@@ -8,41 +8,9 @@ Deno.test("plugin has correct name and enforce", () => {
   assertEquals(plugin.enforce, "pre");
 });
 
-Deno.test("plugin resolveId skips relative paths", () => {
-  const plugin = denoWorkspaceVitePlugin();
-  const resolveId = plugin.resolveId as (id: string) => string | null;
-
-  assertStrictEquals(resolveId("./local-module"), null);
-  assertStrictEquals(resolveId("../parent-module"), null);
-  assertStrictEquals(resolveId("/absolute/path"), null);
-});
-
-Deno.test("plugin resolveId skips external schemes", () => {
-  const plugin = denoWorkspaceVitePlugin();
-  const resolveId = plugin.resolveId as (id: string) => string | null;
-
-  assertStrictEquals(resolveId("npm:lodash"), null);
-  assertStrictEquals(resolveId("jsr:@std/fs"), null);
-  assertStrictEquals(resolveId("http://example.com/mod.ts"), null);
-  assertStrictEquals(resolveId("https://esm.sh/react"), null);
-  assertStrictEquals(resolveId("\0virtual-module"), null);
-});
-
-Deno.test("plugin resolveId returns null when no workspace found", () => {
-  const plugin = denoWorkspaceVitePlugin();
-  const resolveId = plugin.resolveId as (id: string) => string | null;
-
-  const result = resolveId("@some/package");
-  assertStrictEquals(result, null);
-});
-
-Deno.test("plugin resolves workspace imports after configResolved", async () => {
+Deno.test("plugin returns empty config when no jsr imports", async () => {
   const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
   try {
-    const pkgDir = join(tmp, "packages", "shared");
-    await Deno.mkdir(pkgDir, { recursive: true });
-    await Deno.mkdir(join(pkgDir, "src"), { recursive: true });
-
     await Deno.writeTextFile(
       join(tmp, "deno.json"),
       JSON.stringify({
@@ -50,81 +18,61 @@ Deno.test("plugin resolves workspace imports after configResolved", async () => 
       }),
     );
 
-    await Deno.writeTextFile(
-      join(pkgDir, "deno.json"),
-      JSON.stringify({
-        name: "@test/shared",
-        imports: {
-          "@shared/": "./src/",
-        },
-      }),
-    );
-
-    await Deno.writeTextFile(
-      join(pkgDir, "src", "utils.ts"),
-      "export const hello = 'world';",
-    );
-
-    const plugin = denoWorkspaceVitePlugin({ root: tmp });
-    await (plugin.configResolved as (
-      config: { root: string },
-    ) => Promise<void>)({ root: tmp });
-
-    const resolveId = plugin.resolveId as (id: string) => string | null;
-    const result = resolveId("@shared/utils");
-    assertEquals(result, join(pkgDir, "src", "utils.ts"));
-  } finally {
-    await Deno.remove(tmp, { recursive: true });
-  }
-});
-
-Deno.test("plugin resolves exact import match", async () => {
-  const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
-  try {
-    const pkgDir = join(tmp, "packages", "utils");
-    await Deno.mkdir(pkgDir, { recursive: true });
-
-    await Deno.writeTextFile(
-      join(tmp, "deno.json"),
-      JSON.stringify({
-        workspace: ["./packages/*"],
-      }),
-    );
-
-    await Deno.writeTextFile(
-      join(pkgDir, "deno.json"),
-      JSON.stringify({
-        imports: {
-          "@utils": "./index.ts",
-        },
-      }),
-    );
-
-    await Deno.writeTextFile(
-      join(pkgDir, "index.ts"),
-      "export const version = '1.0.0';",
-    );
-
-    const plugin = denoWorkspaceVitePlugin({ root: tmp });
-    await (plugin.configResolved as (
-      config: { root: string },
-    ) => Promise<void>)({ root: tmp });
-
-    const resolveId = plugin.resolveId as (id: string) => string | null;
-    const result = resolveId("@utils");
-    assertEquals(result, join(pkgDir, "index.ts"));
-  } finally {
-    await Deno.remove(tmp, { recursive: true });
-  }
-});
-
-Deno.test("plugin resolves subpath imports", async () => {
-  const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
-  try {
     const pkgDir = join(tmp, "packages", "core");
     await Deno.mkdir(pkgDir, { recursive: true });
-    await Deno.mkdir(join(pkgDir, "lib"), { recursive: true });
+    await Deno.writeTextFile(
+      join(pkgDir, "deno.json"),
+      JSON.stringify({ imports: {} }),
+    );
 
+    const plugin = denoWorkspaceVitePlugin({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | { resolve: { alias: Array<{ find: string; replacement: string }> } }
+      | undefined;
+
+    const result = configFn({ root: tmp });
+    assertStrictEquals(result, undefined);
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("plugin resolves jsr: imports from root deno.json", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
+  try {
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({
+        imports: {
+          "@std/assert": "jsr:@std/assert@^1.0",
+        },
+      }),
+    );
+
+    const nodeModulesDir = join(tmp, "node_modules", "@jsr", "std__assert");
+    await Deno.mkdir(nodeModulesDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(nodeModulesDir, "mod.ts"),
+      "export const assertEquals = () => {};",
+    );
+
+    const plugin = denoWorkspaceVitePlugin({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | { resolve: { alias: Array<{ find: string; replacement: string }> } }
+      | undefined;
+
+    const result = configFn({ root: tmp });
+    assertEquals(result?.resolve.alias.length, 1);
+    assertEquals(result?.resolve.alias[0].find, "@std/assert");
+    assertEquals(result?.resolve.alias[0].replacement, nodeModulesDir);
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("plugin resolves jsr: imports from workspace packages", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
+  try {
     await Deno.writeTextFile(
       join(tmp, "deno.json"),
       JSON.stringify({
@@ -132,39 +80,41 @@ Deno.test("plugin resolves subpath imports", async () => {
       }),
     );
 
+    const pkgDir = join(tmp, "packages", "core");
+    await Deno.mkdir(pkgDir, { recursive: true });
     await Deno.writeTextFile(
       join(pkgDir, "deno.json"),
       JSON.stringify({
         imports: {
-          "@core/": "./lib/",
+          "@std/assert": "jsr:@std/assert@^1.0",
         },
       }),
     );
 
+    const nodeModulesDir = join(tmp, "node_modules", "@jsr", "std__assert");
+    await Deno.mkdir(nodeModulesDir, { recursive: true });
     await Deno.writeTextFile(
-      join(pkgDir, "lib", "helpers.ts"),
-      "export const help = () => {};",
+      join(nodeModulesDir, "mod.ts"),
+      "export const assertEquals = () => {};",
     );
 
     const plugin = denoWorkspaceVitePlugin({ root: tmp });
-    await (plugin.configResolved as (
-      config: { root: string },
-    ) => Promise<void>)({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | { resolve: { alias: Array<{ find: string; replacement: string }> } }
+      | undefined;
 
-    const resolveId = plugin.resolveId as (id: string) => string | null;
-    const result = resolveId("@core/helpers");
-    assertEquals(result, join(pkgDir, "lib", "helpers.ts"));
+    const result = configFn({ root: tmp });
+    assertEquals(result?.resolve.alias.length, 1);
+    assertEquals(result?.resolve.alias[0].find, "@std/assert");
+    assertEquals(result?.resolve.alias[0].replacement, nodeModulesDir);
   } finally {
     await Deno.remove(tmp, { recursive: true });
   }
 });
 
-Deno.test("plugin returns null for unmatched imports", async () => {
+Deno.test("plugin handles multiple workspace packages", async () => {
   const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
   try {
-    const pkgDir = join(tmp, "packages", "shared");
-    await Deno.mkdir(pkgDir, { recursive: true });
-
     await Deno.writeTextFile(
       join(tmp, "deno.json"),
       JSON.stringify({
@@ -172,268 +122,112 @@ Deno.test("plugin returns null for unmatched imports", async () => {
       }),
     );
 
+    const coreDir = join(tmp, "packages", "core");
+    const uiDir = join(tmp, "packages", "ui");
+    await Deno.mkdir(coreDir, { recursive: true });
+    await Deno.mkdir(uiDir, { recursive: true });
+
     await Deno.writeTextFile(
-      join(pkgDir, "deno.json"),
+      join(coreDir, "deno.json"),
       JSON.stringify({
         imports: {
-          "@shared/": "./src/",
+          "@std/assert": "jsr:@std/assert@^1.0",
         },
       }),
     );
 
-    const plugin = denoWorkspaceVitePlugin({ root: tmp });
-    await (plugin.configResolved as (
-      config: { root: string },
-    ) => Promise<void>)({ root: tmp });
+    await Deno.writeTextFile(
+      join(uiDir, "deno.json"),
+      JSON.stringify({
+        imports: {
+          "@std/fs": "jsr:@std/fs@^1.0",
+        },
+      }),
+    );
 
-    const resolveId = plugin.resolveId as (id: string) => string | null;
-    const result = resolveId("@unknown/package");
-    assertStrictEquals(result, null);
+    const assertDir = join(tmp, "node_modules", "@jsr", "std__assert");
+    const fsDir = join(tmp, "node_modules", "@jsr", "std__fs");
+    await Deno.mkdir(assertDir, { recursive: true });
+    await Deno.mkdir(fsDir, { recursive: true });
+    await Deno.writeTextFile(join(assertDir, "mod.ts"), "");
+    await Deno.writeTextFile(join(fsDir, "mod.ts"), "");
+
+    const plugin = denoWorkspaceVitePlugin({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | { resolve: { alias: Array<{ find: string; replacement: string }> } }
+      | undefined;
+
+    const result = configFn({ root: tmp });
+    assertEquals(result?.resolve.alias.length, 2);
   } finally {
     await Deno.remove(tmp, { recursive: true });
   }
 });
 
-Deno.test("plugin initialized flag prevents re-initialization", async () => {
+Deno.test("plugin skips jsr: imports when package not in node_modules", async () => {
   const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
   try {
-    const pkgDir = join(tmp, "packages", "shared");
-    await Deno.mkdir(pkgDir, { recursive: true });
-    await Deno.mkdir(join(pkgDir, "src"), { recursive: true });
-
     await Deno.writeTextFile(
       join(tmp, "deno.json"),
       JSON.stringify({
-        workspace: ["./packages/*"],
-      }),
-    );
-
-    await Deno.writeTextFile(
-      join(pkgDir, "deno.json"),
-      JSON.stringify({
         imports: {
-          "@shared/": "./src/",
+          "@std/assert": "jsr:@std/assert@^1.0",
         },
       }),
     );
 
-    await Deno.writeTextFile(
-      join(pkgDir, "src", "mod.ts"),
-      "export const a = 1;",
-    );
-
     const plugin = denoWorkspaceVitePlugin({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | { resolve: { alias: Array<{ find: string; replacement: string }> } }
+      | undefined;
 
-    await (plugin.configResolved as (
-      config: { root: string },
-    ) => Promise<void>)({ root: tmp });
-    await (plugin.configResolved as (
-      config: { root: string },
-    ) => Promise<void>)({ root: tmp });
-    await (plugin.configResolved as (
-      config: { root: string },
-    ) => Promise<void>)({ root: tmp });
-
-    const resolveId = plugin.resolveId as (id: string) => string | null;
-    const result = resolveId("@shared/mod");
-    assertEquals(result, join(pkgDir, "src", "mod.ts"));
+    const result = configFn({ root: tmp });
+    assertStrictEquals(result, undefined);
   } finally {
     await Deno.remove(tmp, { recursive: true });
   }
 });
 
-Deno.test("plugin resolves imports from package.json (vinxi/solid-start pattern)", async () => {
+Deno.test("plugin handles deno.jsonc files", async () => {
   const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
   try {
-    const pkgDir = join(tmp, "packages", "seeds-form");
-    await Deno.mkdir(pkgDir, { recursive: true });
-    await Deno.mkdir(join(pkgDir, "src", "resolver"), { recursive: true });
-
     await Deno.writeTextFile(
-      join(tmp, "deno.json"),
-      JSON.stringify({
-        workspace: ["./packages/*"],
-      }),
-    );
-
-    await Deno.writeTextFile(
-      join(pkgDir, "package.json"),
-      JSON.stringify({
-        name: "@transitionsag/seeds-form",
-        imports: {
-          "@transitionsag/seeds-form": "./src/mod.ts",
-          "@transitionsag/seeds-form/resolver/zod": "./src/resolver/zod.ts",
+      join(tmp, "deno.jsonc"),
+      `{
+        // comment
+        "imports": {
+          "@std/assert": "jsr:@std/assert@^1.0",
         },
-      }),
+      }`,
     );
 
-    await Deno.writeTextFile(
-      join(pkgDir, "src", "mod.ts"),
-      "export const form = {};",
-    );
-
-    await Deno.writeTextFile(
-      join(pkgDir, "src", "resolver", "zod.ts"),
-      "export const zodResolver = {};",
-    );
+    const nodeModulesDir = join(tmp, "node_modules", "@jsr", "std__assert");
+    await Deno.mkdir(nodeModulesDir, { recursive: true });
+    await Deno.writeTextFile(join(nodeModulesDir, "mod.ts"), "");
 
     const plugin = denoWorkspaceVitePlugin({ root: tmp });
-    await (plugin.configResolved as (
-      config: { root: string },
-    ) => Promise<void>)({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | { resolve: { alias: Array<{ find: string; replacement: string }> } }
+      | undefined;
 
-    const resolveId = plugin.resolveId as (id: string) => string | null;
-
-    const mainResult = resolveId("@transitionsag/seeds-form");
-    assertEquals(mainResult, join(pkgDir, "src", "mod.ts"));
-
-    const zodResult = resolveId("@transitionsag/seeds-form/resolver/zod");
-    assertEquals(zodResult, join(pkgDir, "src", "resolver", "zod.ts"));
+    const result = configFn({ root: tmp });
+    assertEquals(result?.resolve.alias.length, 1);
   } finally {
     await Deno.remove(tmp, { recursive: true });
   }
 });
 
-Deno.test("plugin resolves CSS imports from workspace packages", async () => {
+Deno.test("plugin handles missing deno.json gracefully", async () => {
   const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
   try {
-    const pkgDir = join(tmp, "packages", "bloom");
-    await Deno.mkdir(pkgDir, { recursive: true });
-    await Deno.mkdir(join(pkgDir, "src"), { recursive: true });
-
-    await Deno.writeTextFile(
-      join(tmp, "deno.json"),
-      JSON.stringify({
-        workspace: ["./packages/*"],
-      }),
-    );
-
-    await Deno.writeTextFile(
-      join(pkgDir, "package.json"),
-      JSON.stringify({
-        name: "@transitionsag/seeds-bloom",
-        imports: {
-          "@transitionsag/seeds-bloom": "./src/mod.ts",
-          "@transitionsag/seeds-bloom/styles.css": "./src/styles.css",
-        },
-      }),
-    );
-
-    await Deno.writeTextFile(
-      join(pkgDir, "src", "mod.ts"),
-      "export const bloom = {};",
-    );
-
-    await Deno.writeTextFile(
-      join(pkgDir, "src", "styles.css"),
-      ".bloom { color: green; }",
-    );
-
     const plugin = denoWorkspaceVitePlugin({ root: tmp });
-    await (plugin.configResolved as (
-      config: { root: string },
-    ) => Promise<void>)({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | { resolve: { alias: Array<{ find: string; replacement: string }> } }
+      | undefined;
 
-    const resolveId = plugin.resolveId as (id: string) => string | null;
-
-    const mainResult = resolveId("@transitionsag/seeds-bloom");
-    assertEquals(mainResult, join(pkgDir, "src", "mod.ts"));
-
-    const cssResult = resolveId("@transitionsag/seeds-bloom/styles.css");
-    assertEquals(cssResult, join(pkgDir, "src", "styles.css"));
+    const result = configFn({ root: tmp });
+    assertStrictEquals(result, undefined);
   } finally {
     await Deno.remove(tmp, { recursive: true });
   }
-});
-
-Deno.test("plugin returns null for nonexistent CSS import", async () => {
-  const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
-  try {
-    const pkgDir = join(tmp, "packages", "bloom");
-    await Deno.mkdir(pkgDir, { recursive: true });
-    await Deno.mkdir(join(pkgDir, "src"), { recursive: true });
-
-    await Deno.writeTextFile(
-      join(tmp, "deno.json"),
-      JSON.stringify({
-        workspace: ["./packages/*"],
-      }),
-    );
-
-    await Deno.writeTextFile(
-      join(pkgDir, "package.json"),
-      JSON.stringify({
-        name: "@transitionsag/seeds-bloom",
-        imports: {
-          "@transitionsag/seeds-bloom": "./src/mod.ts",
-          "@transitionsag/seeds-bloom/styles.css": "./src/styles.css",
-        },
-      }),
-    );
-
-    await Deno.writeTextFile(
-      join(pkgDir, "src", "mod.ts"),
-      "export const bloom = {};",
-    );
-
-    const plugin = denoWorkspaceVitePlugin({ root: tmp });
-    await (plugin.configResolved as (
-      config: { root: string },
-    ) => Promise<void>)({ root: tmp });
-
-    const resolveId = plugin.resolveId as (id: string) => string | null;
-
-    const cssResult = resolveId("@transitionsag/seeds-bloom/styles.css");
-    assertStrictEquals(cssResult, null);
-  } finally {
-    await Deno.remove(tmp, { recursive: true });
-  }
-});
-
-Deno.test("plugin resolveId skips vinxi virtual modules", () => {
-  const plugin = denoWorkspaceVitePlugin();
-  const resolveId = plugin.resolveId as (id: string) => string | null;
-
-  assertStrictEquals(resolveId("@manifest/docs/123/assets?id=foo"), null);
-  assertStrictEquals(resolveId("/@manifest/docs/123/assets?id=foo"), null);
-  assertStrictEquals(resolveId("/@manifest/assets"), null);
-  assertStrictEquals(resolveId("$vinxi/handler/client"), null);
-  assertStrictEquals(resolveId("vinxi:manifest"), null);
-  assertStrictEquals(resolveId("\0vite:css"), null);
-});
-
-Deno.test("plugin load intercepts malformed /@manifest/assets without id", async () => {
-  const plugin = denoWorkspaceVitePlugin();
-  const load = plugin.load as (
-    id: string,
-  ) => Promise<{ code: string; moduleType: string } | null>;
-
-  const malformedNoQuery = await load("/@manifest/assets");
-  assertEquals(malformedNoQuery, {
-    code: "export default []",
-    moduleType: "js",
-  });
-
-  const malformedEmptyQuery = await load("/@manifest/assets?");
-  assertEquals(malformedEmptyQuery, {
-    code: "export default []",
-    moduleType: "js",
-  });
-
-  const malformedOtherQuery = await load("/@manifest/assets?foo=bar");
-  assertEquals(malformedOtherQuery, {
-    code: "export default []",
-    moduleType: "js",
-  });
-
-  const validRequest = await load(
-    "/@manifest/docs/123456/assets?id=/src/client.tsx",
-  );
-  assertStrictEquals(validRequest, null);
-
-  const nonManifestRequest = await load("/src/client.tsx");
-  assertStrictEquals(nonManifestRequest, null);
-
-  const nonAssetsManifest = await load("/@manifest/docs/123456/chunks");
-  assertStrictEquals(nonAssetsManifest, null);
 });

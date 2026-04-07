@@ -1,14 +1,13 @@
 # @transitionsag/deno-workspace-vite-plugin
 
-A Vite plugin that resolves local workspace-relative import paths defined in
-`deno.json` import maps, enabling Vite to understand Deno workspace imports.
+A Vite plugin that resolves `jsr:` imports from `deno.json` import maps to
+`node_modules/@jsr/...` paths for Vite compatibility.
 
 ## Why This Exists
 
-Deno workspaces use import maps in `deno.json` to define aliases for local
-packages. Vite running in a Node.js context doesn't natively understand these
-import maps. This plugin bridges that gap by reading workspace configurations
-and resolving import specifiers to absolute file paths.
+Deno uses `jsr:` specifiers for JSR packages, but Vite running in a Node.js
+context doesn't understand these. This plugin converts `jsr:` imports to their
+npm-equivalent paths in `node_modules/@jsr/...`.
 
 ## Installation
 
@@ -26,12 +25,10 @@ import { denoWorkspaceVitePlugin } from "@transitionsag/deno-workspace-vite-plug
 import deno from "@deno/vite-plugin";
 
 export default defineConfig({
-  vite: {
-    plugins: [
-      denoWorkspaceVitePlugin(),
-      deno(),
-    ],
-  },
+  plugins: [
+    denoWorkspaceVitePlugin(),
+    deno(),
+  ],
 });
 ```
 
@@ -56,109 +53,50 @@ export default defineConfig({
 
 ```ts
 denoWorkspaceVitePlugin({
-  root?: string, // Directory to start searching for deno.json. Defaults to Vite's config.root
-  resolveJsrDependencies?: boolean, // Resolve jsr: imports to node_modules/@jsr/... paths. Defaults to false
+  root?: string, // Monorepo root directory. Defaults to Vite's config.root
 })
 ```
 
 ## How It Works
 
-1. **Workspace Discovery**: Walks up from the project root to find `deno.json`
-   or `deno.jsonc` with a `"workspace"` field
-2. **Member Expansion**: Expands glob patterns (e.g. `"./packages/*"`,
-   `"./apps/*"`) to actual directories
-3. **Import Map Collection**: Reads `"imports"` from each workspace member's
-   config, keeping only local file targets (filters out `npm:`, `jsr:`, `http:`,
-   `https:`)
-4. **JSR Resolution (optional)**: When `resolveJsrDependencies: true`, resolves
-   `jsr:` imports to `node_modules/@jsr/...` paths for Vite compatibility
-5. **Resolution**: Intercepts imports via Vite's `resolveId` hook with
-   `enforce: "pre"`, matches against the collected import map, and resolves to
-   absolute paths with automatic extension fallback
+1. Reads `deno.json` (or `deno.jsonc`) from the root
+2. Collects `jsr:` imports from the root config and all workspace packages
+3. Resolves each to `node_modules/@jsr/<scope>__<package>` paths
+4. Returns these as Vite `resolve.alias` configuration
 
-## Supported Features
+## Example
 
-- **JSONC parsing**: Supports both `deno.json` and `deno.jsonc` (JSON with
-  comments)
-- **Subpath imports**: Supports prefix matching for subpath imports like
-  `@scope/pkg/sub/module`
-- **Extension resolution**: Automatically tries `.ts`, `.tsx`, `.js`, `.jsx`,
-  `.mjs`, `.cjs` and index files (`mod.ts`, `mod.tsx`, `index.ts`, `index.tsx`)
-- **Glob patterns**: Supports glob patterns in workspace member definitions
+Given root `deno.json`:
 
-## Public API
+```json
+{
+  "workspace": ["./packages/*"],
+  "imports": {
+    "@std/assert": "jsr:@std/assert@^1.0"
+  }
+}
+```
 
-### `denoWorkspaceVitePlugin(options?)`
+And `packages/core/deno.json`:
 
-Returns a Vite plugin that resolves workspace import map entries.
+```json
+{
+  "imports": {
+    "@std/fs": "jsr:@std/fs@^1.0"
+  }
+}
+```
 
-### `findWorkspaceRoot(startDir)`
-
-Walks up from `startDir` to find a `deno.json` with a `"workspace"` field.
-Returns `WorkspaceConfig | null`.
-
-### `expandMembers(workspace)`
-
-Expands glob patterns in `workspace.members` to actual directory paths.
-
-### `collectImportMap(memberDirs)`
-
-Reads `imports` from each member's `deno.json`/`deno.jsonc`, returning an
-`ImportMap`.
-
-### `matchImportMap(id, importMap)`
-
-Finds the best matching import map entry for a given import specifier. Supports
-exact match and longest prefix match for subpath imports.
-
-### `resolveEntry(entry, id)`
-
-Resolves a matched entry to an absolute file path with extension and index file
-fallback.
+- `@std/assert` resolves to `<root>/node_modules/@jsr/std__assert`
+- `@std/fs` resolves to `<root>/node_modules/@jsr/std__fs`
 
 ## Types
 
 ```ts
 interface DenoWorkspaceVitePluginOptions {
   root?: string;
-  resolveJsrDependencies?: boolean;
-}
-
-interface WorkspaceConfig {
-  rootDir: string;
-  members: string[];
-}
-
-interface ImportMap {
-  entries: Map<string, ImportMapEntry>;
-}
-
-interface ImportMapEntry {
-  key: string;
-  target: string;
-  absolutePath: string | null;
-  sourceConfig: string;
 }
 ```
-
-## Example Workspace Structure
-
-```
-my-workspace/
-├── deno.json              # { "workspace": ["./packages/*", "./apps/*"] }
-├── packages/
-│   └── shared/
-│       ├── deno.json      # { "name": "@workspace/shared", "imports": { "@shared/": "./src/" } }
-│       └── src/
-│           └── utils.ts
-└── apps/
-    └── web/
-        ├── deno.json      # { "imports": { "@shared/": "../../packages/shared/src/" } }
-        └── vite.config.ts # Uses denoWorkspaceVitePlugin()
-```
-
-With this setup, imports like `@shared/utils` in the web app will be resolved to
-the correct file in the shared package.
 
 ## License
 
