@@ -809,3 +809,112 @@ Deno.test("resolveEntry skips workspace: targets", async () => {
     await Deno.remove(tmp, { recursive: true });
   }
 });
+
+Deno.test("collectImportMap resolves jsr: dependencies when enabled", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "importmap-test-" });
+  try {
+    const pkgDir = join(tmp, "packages", "core");
+    await Deno.mkdir(pkgDir, { recursive: true });
+
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({
+        workspace: ["./packages/*"],
+      }),
+    );
+
+    await Deno.writeTextFile(
+      join(pkgDir, "deno.json"),
+      JSON.stringify({
+        imports: {
+          "@std/assert": "jsr:@std/assert@^1.0",
+        },
+      }),
+    );
+
+    const nodeModulesDir = join(tmp, "node_modules", "@jsr", "std__assert");
+    await Deno.mkdir(nodeModulesDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(nodeModulesDir, "mod.ts"),
+      "export const assertEquals = () => {};",
+    );
+
+    const importMap = await collectImportMap([], tmp, {
+      resolveJsrDependencies: true,
+      workspaceRoot: tmp,
+    });
+
+    const entry = importMap.entries.get("@std/assert");
+    assertNotEquals(entry, undefined);
+    assertEquals(entry!.absolutePath, nodeModulesDir);
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("collectImportMap returns null for jsr: when package not in node_modules", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "importmap-test-" });
+  try {
+    const pkgDir = join(tmp, "packages", "core");
+    await Deno.mkdir(pkgDir, { recursive: true });
+
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({
+        workspace: ["./packages/*"],
+      }),
+    );
+
+    await Deno.writeTextFile(
+      join(pkgDir, "deno.json"),
+      JSON.stringify({
+        imports: {
+          "@std/assert": "jsr:@std/assert@^1.0",
+        },
+      }),
+    );
+
+    const importMap = await collectImportMap([], tmp, {
+      resolveJsrDependencies: true,
+      workspaceRoot: tmp,
+    });
+
+    const entry = importMap.entries.get("@std/assert");
+    assertNotEquals(entry, undefined);
+    assertStrictEquals(entry!.absolutePath, null);
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("collectImportMap skips jsr: dependencies when option not enabled", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "importmap-test-" });
+  try {
+    const pkgDir = join(tmp, "packages", "core");
+    await Deno.mkdir(pkgDir, { recursive: true });
+
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({
+        workspace: ["./packages/*"],
+      }),
+    );
+
+    await Deno.writeTextFile(
+      join(pkgDir, "deno.json"),
+      JSON.stringify({
+        imports: {
+          "@std/assert": "jsr:@std/assert@^1.0",
+        },
+      }),
+    );
+
+    const importMap = await collectImportMap([], tmp);
+
+    const entry = importMap.entries.get("@std/assert");
+    assertNotEquals(entry, undefined);
+    assertStrictEquals(entry!.absolutePath, null);
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});

@@ -7,4 +7,8 @@ export {
   matchImportMap,
   resolveEntry,
 } from "./import-map.ts";
-export type { ImportMap, ImportMapEntry } from "./import-map.ts";
+export type {
+  ImportMap,
+  ImportMapEntry,
+  JsrResolutionOptions,
+} from "./import-map.ts";

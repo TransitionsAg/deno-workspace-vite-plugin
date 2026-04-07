@@ -57,6 +57,7 @@ export default defineConfig({
 ```ts
 denoWorkspaceVitePlugin({
   root?: string, // Directory to start searching for deno.json. Defaults to Vite's config.root
+  resolveJsrDependencies?: boolean, // Resolve jsr: imports to node_modules/@jsr/... paths. Defaults to false
 })
 ```
 
@@ -64,12 +65,14 @@ denoWorkspaceVitePlugin({
 
 1. **Workspace Discovery**: Walks up from the project root to find `deno.json`
    or `deno.jsonc` with a `"workspace"` field
-2. **Member Expansion**: Expands glob patterns (e.g., `"./packages/*"`,
+2. **Member Expansion**: Expands glob patterns (e.g. `"./packages/*"`,
    `"./apps/*"`) to actual directories
 3. **Import Map Collection**: Reads `"imports"` from each workspace member's
    config, keeping only local file targets (filters out `npm:`, `jsr:`, `http:`,
    `https:`)
-4. **Resolution**: Intercepts imports via Vite's `resolveId` hook with
+4. **JSR Resolution (optional)**: When `resolveJsrDependencies: true`, resolves
+   `jsr:` imports to `node_modules/@jsr/...` paths for Vite compatibility
+5. **Resolution**: Intercepts imports via Vite's `resolveId` hook with
    `enforce: "pre"`, matches against the collected import map, and resolves to
    absolute paths with automatic extension fallback
 
@@ -118,6 +121,7 @@ fallback.
 ```ts
 interface DenoWorkspaceVitePluginOptions {
   root?: string;
+  resolveJsrDependencies?: boolean;
 }
 
 interface WorkspaceConfig {

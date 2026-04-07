@@ -2,12 +2,14 @@ import type { Plugin } from "vite";
 import { expandMembers, findWorkspaceRoot } from "./workspace.ts";
 import {
   collectImportMap,
+  type JsrResolutionOptions,
   matchImportMap,
   resolveEntry,
 } from "./import-map.ts";
 
 export type DenoWorkspaceVitePluginOptions = {
   root?: string;
+  resolveJsrDependencies?: boolean;
 };
 
 export function denoWorkspaceVitePlugin(
@@ -26,7 +28,15 @@ export function denoWorkspaceVitePlugin(
       if (!workspace) return;
 
       const memberDirs = await expandMembers(workspace);
-      importMap = await collectImportMap(memberDirs, workspace.rootDir);
+      const jsrOptions: JsrResolutionOptions | undefined =
+        options.resolveJsrDependencies
+          ? { resolveJsrDependencies: true, workspaceRoot: workspace.rootDir }
+          : undefined;
+      importMap = await collectImportMap(
+        memberDirs,
+        workspace.rootDir,
+        jsrOptions,
+      );
       if (!importMap) return;
 
       const aliasMap: Record<string, string> = {};
@@ -63,7 +73,15 @@ export function denoWorkspaceVitePlugin(
         }
 
         const memberDirs = await expandMembers(workspace);
-        importMap = await collectImportMap(memberDirs, workspace.rootDir);
+        const jsrOptions: JsrResolutionOptions | undefined =
+          options.resolveJsrDependencies
+            ? { resolveJsrDependencies: true, workspaceRoot: workspace.rootDir }
+            : undefined;
+        importMap = await collectImportMap(
+          memberDirs,
+          workspace.rootDir,
+          jsrOptions,
+        );
       }
       initialized = true;
     },

@@ -2,6 +2,30 @@ import { parse as parseJsonc } from "@std/jsonc";
 import { existsSync } from "@std/fs/exists";
 import { isAbsolute, join, normalize } from "@std/path";
 
+export type JsrResolutionOptions = {
+  resolveJsrDependencies?: boolean;
+  workspaceRoot?: string;
+};
+
+function jsrSpecifierToNpmPath(
+  specifier: string,
+  workspaceRoot: string,
+): string | null {
+  if (!specifier.startsWith("jsr:")) return null;
+
+  let rest = specifier.slice(4);
+  rest = rest.replace(/@[\^~].*$/, "");
+
+  if (rest.startsWith("@")) {
+    rest = rest.slice(1);
+    rest = rest.replace("/", "__");
+  } else {
+    rest = rest.replace("/", "__");
+  }
+
+  return join(workspaceRoot, "node_modules", "@jsr", rest);
+}
+
 export type ImportMapEntry = {
   key: string;
   target: string;
@@ -33,7 +57,21 @@ function readImportsFromConfig(configPath: string): Record<string, string> {
   return result;
 }
 
-function resolveTarget(target: string, configDir: string): string | null {
+function resolveTarget(
+  target: string,
+  configDir: string,
+  jsrOptions?: JsrResolutionOptions,
+): string | null {
+  if (
+    target.startsWith("jsr:") && jsrOptions?.resolveJsrDependencies &&
+    jsrOptions.workspaceRoot
+  ) {
+    const npmPath = jsrSpecifierToNpmPath(target, jsrOptions.workspaceRoot);
+    if (npmPath && existsSync(npmPath)) {
+      return npmPath;
+    }
+    return null;
+  }
   if (
     target.startsWith("jsr:") || target.startsWith("npm:") ||
     target.startsWith("http:") || target.startsWith("https:") ||
@@ -139,6 +177,7 @@ function collectExportsFromMembers(
 
 function collectImportsFromMembers(
   members: WorkspaceMember[],
+  jsrOptions?: JsrResolutionOptions,
 ): Map<string, ImportMapEntry> {
   const entries = new Map<string, ImportMapEntry>();
 
@@ -148,15 +187,16 @@ function collectImportsFromMembers(
       const imports = readImportsFromConfig(configPath);
       for (const [key, target] of Object.entries(imports)) {
         if (!entries.has(key)) {
-          const absolutePath = resolveTarget(target, member.dir);
-          if (absolutePath) {
-            entries.set(key, {
-              key,
-              target,
-              absolutePath,
-              sourceConfig: configPath,
-            });
+          if (target.startsWith("workspace:")) {
+            continue;
           }
+          const absolutePath = resolveTarget(target, member.dir, jsrOptions);
+          entries.set(key, {
+            key,
+            target,
+            absolutePath,
+            sourceConfig: configPath,
+          });
         }
       }
       break;
@@ -169,6 +209,7 @@ function collectImportsFromMembers(
 export function collectImportMap(
   memberDirs: string[],
   workspaceRoot?: string,
+  jsrOptions?: JsrResolutionOptions,
 ): ImportMap {
   const entries = new Map<string, ImportMapEntry>();
 
@@ -180,7 +221,7 @@ export function collectImportMap(
         entries.set(key, entry);
       }
     }
-    const importEntries = collectImportsFromMembers(members);
+    const importEntries = collectImportsFromMembers(members, jsrOptions);
     for (const [key, entry] of importEntries) {
       if (!entries.has(key)) {
         entries.set(key, entry);
@@ -198,7 +239,10 @@ export function collectImportMap(
 
       for (const [key, target] of Object.entries(imports)) {
         if (!entries.has(key)) {
-          const absolutePath = resolveTarget(target, configDir);
+          if (target.startsWith("workspace:")) {
+            continue;
+          }
+          const absolutePath = resolveTarget(target, configDir, jsrOptions);
           entries.set(key, {
             key,
             target,
