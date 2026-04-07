@@ -389,3 +389,15 @@ Deno.test("plugin returns null for nonexistent CSS import", async () => {
     await Deno.remove(tmp, { recursive: true });
   }
 });
+
+Deno.test("plugin resolveId skips vinxi virtual modules", () => {
+  const plugin = denoWorkspaceVitePlugin();
+  const resolveId = plugin.resolveId as (id: string) => string | null;
+
+  assertStrictEquals(resolveId("@manifest/docs/123/assets?id=foo"), null);
+  assertStrictEquals(resolveId("/@manifest/docs/123/assets?id=foo"), null);
+  assertStrictEquals(resolveId("/@manifest/assets"), null);
+  assertStrictEquals(resolveId("$vinxi/handler/client"), null);
+  assertStrictEquals(resolveId("vinxi:manifest"), null);
+  assertStrictEquals(resolveId("\0vite:css"), null);
+});

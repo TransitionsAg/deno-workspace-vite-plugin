@@ -42,6 +42,14 @@ export function denoWorkspaceVitePlugin(
         id.startsWith("http:") || id.startsWith("https:") ||
         id.startsWith("\0")
       ) return null;
+      if (
+        id.startsWith("@manifest/") ||
+        id.startsWith("/@manifest") ||
+        id.startsWith("virtual:") ||
+        id.startsWith("$vinxi/") ||
+        id.startsWith("vinxi:") ||
+        id.startsWith("\0vite:")
+      ) return null;
 
       const entry = matchImportMap(id, importMap);
       if (!entry) return null;
