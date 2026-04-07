@@ -137,6 +137,33 @@ function collectExportsFromMembers(
   return entries;
 }
 
+function collectImportsFromMembers(
+  members: WorkspaceMember[],
+): Map<string, ImportMapEntry> {
+  const entries = new Map<string, ImportMapEntry>();
+
+  for (const member of members) {
+    for (const configFile of ["deno.json", "deno.jsonc", "package.json"]) {
+      const configPath = join(member.dir, configFile);
+      const imports = readImportsFromConfig(configPath);
+      for (const [key, target] of Object.entries(imports)) {
+        if (!entries.has(key)) {
+          const absolutePath = resolveTarget(target, member.dir);
+          entries.set(key, {
+            key,
+            target,
+            absolutePath,
+            sourceConfig: configPath,
+          });
+        }
+      }
+      break;
+    }
+  }
+
+  return entries;
+}
+
 export function collectImportMap(
   memberDirs: string[],
   workspaceRoot?: string,
@@ -147,6 +174,12 @@ export function collectImportMap(
     const members = readWorkspaceMembers(workspaceRoot);
     const exportEntries = collectExportsFromMembers(members);
     for (const [key, entry] of exportEntries) {
+      if (!entries.has(key)) {
+        entries.set(key, entry);
+      }
+    }
+    const importEntries = collectImportsFromMembers(members);
+    for (const [key, entry] of importEntries) {
       if (!entries.has(key)) {
         entries.set(key, entry);
       }
