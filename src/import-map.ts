@@ -123,7 +123,7 @@ function collectExportsFromMembers(
         : `${member.name}${exportKey.slice(1)}`;
 
       const absolutePath = resolveExportTarget(exportTarget, member.dir);
-      if (!entries.has(importKey)) {
+      if (absolutePath && !entries.has(importKey)) {
         entries.set(importKey, {
           key: importKey,
           target: exportTarget,
@@ -149,12 +149,14 @@ function collectImportsFromMembers(
       for (const [key, target] of Object.entries(imports)) {
         if (!entries.has(key)) {
           const absolutePath = resolveTarget(target, member.dir);
-          entries.set(key, {
-            key,
-            target,
-            absolutePath,
-            sourceConfig: configPath,
-          });
+          if (absolutePath) {
+            entries.set(key, {
+              key,
+              target,
+              absolutePath,
+              sourceConfig: configPath,
+            });
+          }
         }
       }
       break;
