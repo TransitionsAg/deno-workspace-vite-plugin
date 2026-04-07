@@ -110,6 +110,48 @@ Deno.test("findWorkspaceRoot handles JSONC with comments", async () => {
   }
 });
 
+Deno.test("findWorkspaceRoot walks past member deno.json to root workspace", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "workspace-test-" });
+  try {
+    // Simulates: seeds/deno.json (workspace root) + seeds/apps/docs/deno.json (member)
+    const memberDir = join(tmp, "apps", "docs");
+    await Deno.mkdir(memberDir, { recursive: true });
+
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({ workspace: ["./packages/*", "./apps/*"] }),
+    );
+    await Deno.writeTextFile(
+      join(memberDir, "deno.json"),
+      JSON.stringify({ name: "@myapp/docs", imports: {} }),
+    );
+
+    // Starting from inside the member app should still find the root workspace
+    const result = findWorkspaceRoot(memberDir);
+    assertNotEquals(result, null);
+    assertEquals(result!.rootDir, tmp);
+    assertEquals(result!.members, ["./packages/*", "./apps/*"]);
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("findWorkspaceRoot returns member config when no workspace root above", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "workspace-test-" });
+  try {
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({ name: "standalone-pkg" }),
+    );
+    const result = findWorkspaceRoot(tmp);
+    assertNotEquals(result, null);
+    assertEquals(result!.rootDir, tmp);
+    assertEquals(result!.members, []);
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
 Deno.test("expandMembers expands glob patterns to directories", async () => {
   const tmp = await Deno.makeTempDir({ prefix: "workspace-test-" });
   try {
