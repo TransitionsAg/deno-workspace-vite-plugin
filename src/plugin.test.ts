@@ -1,4 +1,4 @@
-import { assertEquals, assertStrictEquals } from "@std/assert";
+import { assert, assertEquals, assertStrictEquals } from "@std/assert";
 import { join } from "@std/path";
 import { denoWorkspaceVitePlugin } from "./plugin.ts";
 
@@ -222,11 +222,237 @@ Deno.test("plugin handles missing deno.json gracefully", async () => {
   try {
     const plugin = denoWorkspaceVitePlugin({ root: tmp });
     const configFn = plugin.config as (config: { root: string }) =>
-      | { resolve: { alias: Array<{ find: string; replacement: string }> } }
+      | {
+        resolve: {
+          alias: Array<{ find: string | RegExp; replacement: string }>;
+        };
+      }
       | undefined;
 
     const result = configFn({ root: tmp });
     assertStrictEquals(result, undefined);
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+type AliasResult = {
+  resolve: {
+    alias: Array<{ find: string | RegExp; replacement: string }>;
+  };
+};
+
+Deno.test("plugin resolves workspace package subpath exports", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
+  try {
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({ workspace: ["./packages/*"] }),
+    );
+
+    const primitivesDir = join(tmp, "packages", "primitives");
+    await Deno.mkdir(primitivesDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(primitivesDir, "deno.json"),
+      JSON.stringify({
+        name: "@scope/primitives",
+        exports: {
+          "./button": "./src/button/mod.tsx",
+          "./tree-view": "./src/tree-view/mod.tsx",
+        },
+      }),
+    );
+
+    const plugin = denoWorkspaceVitePlugin({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | AliasResult
+      | undefined;
+
+    const result = configFn({ root: tmp });
+    assert(result);
+    assertEquals(result.resolve.alias.length, 2);
+
+    const buttonAlias = result.resolve.alias.find(
+      (a) => a.find === "@scope/primitives/button",
+    );
+    assert(buttonAlias);
+    assertEquals(
+      buttonAlias.replacement,
+      join(primitivesDir, "src", "button", "mod.tsx"),
+    );
+
+    const treeViewAlias = result.resolve.alias.find(
+      (a) => a.find === "@scope/primitives/tree-view",
+    );
+    assert(treeViewAlias);
+    assertEquals(
+      treeViewAlias.replacement,
+      join(primitivesDir, "src", "tree-view", "mod.tsx"),
+    );
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("plugin resolves workspace package main export", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
+  try {
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({ workspace: ["./packages/*"] }),
+    );
+
+    const coreDir = join(tmp, "packages", "core");
+    await Deno.mkdir(coreDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(coreDir, "deno.json"),
+      JSON.stringify({
+        name: "@scope/core",
+        exports: { ".": "./src/mod.ts" },
+      }),
+    );
+
+    const plugin = denoWorkspaceVitePlugin({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | AliasResult
+      | undefined;
+
+    const result = configFn({ root: tmp });
+    assert(result);
+    assertEquals(result.resolve.alias.length, 1);
+    assertEquals(result.resolve.alias[0].find, "@scope/core");
+    assertEquals(
+      result.resolve.alias[0].replacement,
+      join(coreDir, "src", "mod.ts"),
+    );
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("plugin resolves workspace package wildcard exports", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
+  try {
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({ workspace: ["./packages/*"] }),
+    );
+
+    const coreDir = join(tmp, "packages", "core");
+    await Deno.mkdir(coreDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(coreDir, "deno.json"),
+      JSON.stringify({
+        name: "@scope/core",
+        exports: { "./input/*": "./src/input/*.tsx" },
+      }),
+    );
+
+    const plugin = denoWorkspaceVitePlugin({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | AliasResult
+      | undefined;
+
+    const result = configFn({ root: tmp });
+    assert(result);
+    assertEquals(result.resolve.alias.length, 1);
+
+    const alias = result.resolve.alias[0];
+    assert(alias.find instanceof RegExp);
+    assertEquals(
+      alias.replacement,
+      join(coreDir, "src", "input", "$1.tsx"),
+    );
+    assert((alias.find as RegExp).test("@scope/core/input/text-field"));
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("plugin resolves both jsr and workspace aliases together", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
+  try {
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({
+        workspace: ["./packages/*"],
+        imports: { "@std/assert": "jsr:@std/assert@^1.0" },
+      }),
+    );
+
+    const primitivesDir = join(tmp, "packages", "primitives");
+    await Deno.mkdir(primitivesDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(primitivesDir, "deno.json"),
+      JSON.stringify({
+        name: "@scope/primitives",
+        exports: { "./button": "./src/button/mod.tsx" },
+      }),
+    );
+
+    const nodeModulesDir = join(tmp, "node_modules", "@jsr", "std__assert");
+    await Deno.mkdir(nodeModulesDir, { recursive: true });
+    await Deno.writeTextFile(join(nodeModulesDir, "mod.ts"), "");
+
+    const plugin = denoWorkspaceVitePlugin({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | AliasResult
+      | undefined;
+
+    const result = configFn({ root: tmp });
+    assert(result);
+    assertEquals(result.resolve.alias.length, 2);
+
+    const jsrAlias = result.resolve.alias.find(
+      (a) => a.find === "@std/assert",
+    );
+    assert(jsrAlias);
+    assertEquals(jsrAlias.replacement, nodeModulesDir);
+
+    const wsAlias = result.resolve.alias.find(
+      (a) => a.find === "@scope/primitives/button",
+    );
+    assert(wsAlias);
+    assertEquals(
+      wsAlias.replacement,
+      join(primitivesDir, "src", "button", "mod.tsx"),
+    );
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
+
+Deno.test("plugin handles workspace package string exports", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
+  try {
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({ workspace: ["./packages/*"] }),
+    );
+
+    const coreDir = join(tmp, "packages", "core");
+    await Deno.mkdir(coreDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(coreDir, "deno.json"),
+      JSON.stringify({
+        name: "@scope/core",
+        exports: "./src/mod.ts",
+      }),
+    );
+
+    const plugin = denoWorkspaceVitePlugin({ root: tmp });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | AliasResult
+      | undefined;
+
+    const result = configFn({ root: tmp });
+    assert(result);
+    assertEquals(result.resolve.alias.length, 1);
+    assertEquals(result.resolve.alias[0].find, "@scope/core");
+    assertEquals(
+      result.resolve.alias[0].replacement,
+      join(coreDir, "src", "mod.ts"),
+    );
   } finally {
     await Deno.remove(tmp, { recursive: true });
   }
