@@ -1,6 +1,6 @@
 {
   "name": "@transitionsag/deno-workspace-vite-plugin",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "license": "MIT",
   "description": "Vite plugin that resolves jsr: imports and ~/ paths from deno.json import maps",
   "exports": {
