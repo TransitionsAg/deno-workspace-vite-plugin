@@ -19,6 +19,21 @@ function readConfig(path: string): Record<string, unknown> | null {
   }
 }
 
+function findWorkspaceRoot(startDir: string): string | null {
+  let dir = startDir;
+  for (;;) {
+    const config = readConfig(join(dir, "deno.json")) ??
+      readConfig(join(dir, "deno.jsonc"));
+    if (config && Array.isArray(config.workspace)) {
+      return dir;
+    }
+    const parent = join(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -162,7 +177,8 @@ export function denoWorkspaceVitePlugin(
     enforce: "pre",
 
     config(config) {
-      const root = options.root ?? config.root ?? Deno.cwd();
+      const startDir = options.root ?? config.root ?? Deno.cwd();
+      const root = findWorkspaceRoot(startDir) ?? startDir;
       const allAliases = [
         ...collectJsrAliases(root),
         ...collectWorkspaceAliases(root),

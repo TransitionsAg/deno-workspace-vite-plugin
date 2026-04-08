@@ -457,3 +457,47 @@ Deno.test("plugin handles workspace package string exports", async () => {
     await Deno.remove(tmp, { recursive: true });
   }
 });
+
+Deno.test("plugin walks up from subdirectory to find workspace root", async () => {
+  const tmp = await Deno.makeTempDir({ prefix: "plugin-test-" });
+  try {
+    await Deno.writeTextFile(
+      join(tmp, "deno.json"),
+      JSON.stringify({ workspace: ["./packages/*", "./apps/*"] }),
+    );
+
+    const coreDir = join(tmp, "packages", "core");
+    await Deno.mkdir(coreDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(coreDir, "deno.json"),
+      JSON.stringify({
+        name: "@scope/core",
+        exports: {
+          ".": "./src/index.ts",
+          "./utils": "./src/utils.ts",
+        },
+      }),
+    );
+
+    const appDir = join(tmp, "apps", "web");
+    await Deno.mkdir(appDir, { recursive: true });
+    await Deno.writeTextFile(
+      join(appDir, "deno.json"),
+      JSON.stringify({ name: "@scope/web", exports: "./src/app.ts" }),
+    );
+
+    const plugin = denoWorkspaceVitePlugin({ root: appDir });
+    const configFn = plugin.config as (config: { root: string }) =>
+      | AliasResult
+      | undefined;
+
+    const result = configFn({ root: appDir });
+    assert(result);
+    const finds = result.resolve.alias.map((a) => a.find);
+    assert(finds.includes("@scope/core"));
+    assert(finds.includes("@scope/core/utils"));
+    assert(finds.includes("@scope/web"));
+  } finally {
+    await Deno.remove(tmp, { recursive: true });
+  }
+});
